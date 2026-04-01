@@ -27,13 +27,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const fetchProfile = useCallback(async (userId: string) => {
     try {
+      // Ensure we have a valid session token before querying
+      const { data: { session: freshSession } } = await supabase.auth.getSession();
+      if (!freshSession) {
+        console.warn("fetchProfile: no active session, skipping");
+        return null;
+      }
+
       const { data, error } = await supabase
         .from("profiles")
         .select("id, full_name, email, tenant_id, status")
         .eq("id", userId)
-        .single();
+        .maybeSingle();
       if (error) {
         console.error("Error fetching profile:", error.message);
+        return null;
+      }
+      if (!data) {
+        console.warn("fetchProfile: profile not found for user", userId);
         return null;
       }
       // Update last_seen_at
