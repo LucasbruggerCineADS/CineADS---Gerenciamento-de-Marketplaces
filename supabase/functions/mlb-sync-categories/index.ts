@@ -18,100 +18,114 @@ interface CategoryNode {
   updated_at: string
 }
 
-async function fetchWithRetry(url: string, accessToken: string, retries = 3): Promise<any> {
+async function fetchML(url: string, accessToken: string, retries = 3): Promise<any> {
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
       const res = await fetch(url, {
-        headers: {
-          "Authorization": `Bearer ${accessToken}`,
-          "Accept": "application/json",
-        },
+        headers: { "Authorization": `Bearer ${accessToken}`, "Accept": "application/json" },
         signal: AbortSignal.timeout(15000),
       })
       if (res.status === 429) {
-        const wait = Math.min(2000 * attempt, 10000)
-        console.log(`[MLB Sync] Rate limited on ${url}, waiting ${wait}ms...`)
-        await new Promise((r) => setTimeout(r, wait))
+        await new Promise((r) => setTimeout(r, Math.min(2000 * attempt, 10000)))
         continue
       }
-      if (!res.ok) {
-        const body = await res.text().catch(() => "")
-        throw new Error(`HTTP ${res.status} for ${url}: ${body.slice(0, 200)}`)
-      }
+      if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`)
       return await res.json()
     } catch (err) {
-      console.warn(`[MLB Sync] Attempt ${attempt}/${retries} failed for ${url}:`, String(err))
       if (attempt === retries) throw err
       await new Promise((r) => setTimeout(r, 1000 * attempt))
     }
   }
 }
 
-// Limited concurrency helper
-async function mapWithConcurrency<T, R>(
-  items: T[],
-  fn: (item: T) => Promise<R>,
-  concurrency: number
-): Promise<R[]> {
+async function mapWithConcurrency<T, R>(items: T[], fn: (item: T) => Promise<R>, concurrency: number): Promise<R[]> {
   const results: R[] = []
   let index = 0
-
   async function worker() {
     while (index < items.length) {
       const i = index++
       results[i] = await fn(items[i])
     }
   }
-
-  const workers = Array.from({ length: Math.min(concurrency, items.length) }, () => worker())
-  await Promise.all(workers)
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, () => worker()))
   return results
 }
 
 async function fetchCategoryTree(
-  categoryId: string,
-  parentId: string | null,
-  depth: number,
-  pathFromRoot: Array<{ id: string; name: string }>,
-  accessToken: string
+  categoryId: string, parentId: string | null, depth: number,
+  pathFromRoot: Array<{ id: string; name: string }>, accessToken: string
 ): Promise<CategoryNode[]> {
   const result: CategoryNode[] = []
-
   try {
-    const data = await fetchWithRetry(`https://api.mercadolibre.com/categories/${categoryId}`, accessToken)
+    const data = await fetchML(`https://api.mercadolibre.com/categories/${categoryId}`, accessToken)
     if (!data?.id) return result
-
     const currentPath = [...pathFromRoot, { id: data.id, name: data.name }]
     const children = data.children_categories || []
-    const isLeaf = children.length === 0
-
     result.push({
-      id: data.id,
-      name: data.name,
-      parent_id: parentId,
-      is_leaf: isLeaf,
-      depth,
-      path_from_root: currentPath,
-      site_id: "MLB",
+      id: data.id, name: data.name, parent_id: parentId,
+      is_leaf: children.length === 0, depth,
+      path_from_root: currentPath, site_id: "MLB",
       total_items_in_this_category: data.total_items_in_this_category || 0,
       updated_at: new Date().toISOString(),
     })
-
     if (children.length > 0) {
       const childResults = await mapWithConcurrency(
         children,
         (child: any) => fetchCategoryTree(child.id, data.id, depth + 1, currentPath, accessToken),
         3
       )
-      for (const childNodes of childResults) {
-        result.push(...childNodes)
-      }
+      for (const nodes of childResults) result.push(...nodes)
     }
   } catch (err) {
-    console.error(`[MLB Sync] Error fetching category ${categoryId}:`, err)
+    console.error(`[MLB Sync] Error fetching ${categoryId}:`, err)
   }
-
   return result
+}
+
+async function runSync(supabase: any, accessToken: string, syncLogId: string | undefined) {
+  const startTime = Date.now()
+  try {
+    const rootList = await fetchML("https://api.mercadolibre.com/sites/MLB/categories", accessToken)
+    if (!Array.isArray(rootList) || rootList.length === 0) throw new Error("No root categories from ML API")
+
+    const allCategories: CategoryNode[] = []
+    const rootResults = await mapWithConcurrency(
+      rootList,
+      (root: any) => fetchCategoryTree(root.id, null, 0, [], accessToken),
+      5
+    )
+    for (const nodes of rootResults) allCategories.push(...nodes)
+
+    allCategories.sort((a, b) => a.depth - b.depth)
+
+    const CHUNK = 500
+    let totalUpserted = 0
+    for (let i = 0; i < allCategories.length; i += CHUNK) {
+      const { error } = await supabase.from("mlb_categories")
+        .upsert(allCategories.slice(i, i + CHUNK), { onConflict: "id", ignoreDuplicates: false })
+      if (error) throw error
+      totalUpserted += Math.min(CHUNK, allCategories.length - i)
+    }
+
+    const durationSeconds = (Date.now() - startTime) / 1000
+    if (syncLogId) {
+      await supabase.from("mlb_sync_logs").update({
+        status: "success", finished_at: new Date().toISOString(),
+        total_processed: allCategories.length, total_upserted: totalUpserted,
+        duration_seconds: durationSeconds,
+      }).eq("id", syncLogId)
+    }
+    console.log(`[MLB Sync] ✅ Done in ${durationSeconds}s — ${totalUpserted} categories`)
+  } catch (err) {
+    const durationSeconds = (Date.now() - startTime) / 1000
+    console.error("[MLB Sync] ❌ Error:", String(err))
+    if (syncLogId) {
+      await supabase.from("mlb_sync_logs").update({
+        status: "error", finished_at: new Date().toISOString(),
+        error_message: String(err), duration_seconds: durationSeconds,
+      }).eq("id", syncLogId)
+    }
+  }
 }
 
 serve(async (req) => {
@@ -122,7 +136,6 @@ serve(async (req) => {
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
   )
 
-  // Get a valid ML access token from any connected integration
   const { data: integrations } = await supabase
     .from("marketplace_integrations")
     .select("credentials")
@@ -132,104 +145,21 @@ serve(async (req) => {
 
   const accessToken = (integrations?.[0]?.credentials as any)?.access_token
   if (!accessToken) {
-    return new Response(JSON.stringify({ error: "Nenhuma integração Mercado Livre conectada. Conecte sua conta primeiro em Integrações." }), {
-      status: 400,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    return new Response(JSON.stringify({ error: "Nenhuma integração Mercado Livre conectada. Conecte sua conta em Integrações." }), {
+      status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
     })
   }
 
   const { data: syncLog } = await supabase
     .from("mlb_sync_logs")
     .insert({ status: "running", started_at: new Date().toISOString() })
-    .select()
-    .single()
+    .select("id").single()
 
-  const startTime = Date.now()
+  // Run sync in background — avoids HTTP timeout on large category trees
+  // @ts-ignore EdgeRuntime is available in Deno Deploy / Supabase Edge Functions
+  EdgeRuntime.waitUntil(runSync(supabase, accessToken, syncLog?.id))
 
-  try {
-    console.log("[MLB Sync] Fetching root categories...")
-
-    const rootList = await fetchWithRetry("https://api.mercadolibre.com/sites/MLB/categories", accessToken)
-    if (!Array.isArray(rootList) || rootList.length === 0) {
-      throw new Error("No root categories returned from ML API")
-    }
-
-    console.log(`[MLB Sync] Found ${rootList.length} root categories. Fetching hierarchy...`)
-
-    const allCategories: CategoryNode[] = []
-
-    const rootResults = await mapWithConcurrency(
-      rootList,
-      (root: any) => {
-        console.log(`[MLB Sync] Fetching tree for: ${root.name} (${root.id})`)
-        return fetchCategoryTree(root.id, null, 0, [], accessToken)
-      },
-      5
-    )
-
-    for (const rootNodes of rootResults) {
-      allCategories.push(...rootNodes)
-    }
-
-    console.log(`[MLB Sync] ${allCategories.length} categories fetched. Upserting...`)
-
-    allCategories.sort((a, b) => a.depth - b.depth)
-
-    const CHUNK_SIZE = 500
-    let totalUpserted = 0
-
-    for (let i = 0; i < allCategories.length; i += CHUNK_SIZE) {
-      const chunk = allCategories.slice(i, i + CHUNK_SIZE)
-      const { error } = await supabase
-        .from("mlb_categories")
-        .upsert(chunk, { onConflict: "id", ignoreDuplicates: false })
-
-      if (error) {
-        console.error(`[MLB Sync] Upsert error at chunk ${i}-${i + CHUNK_SIZE}:`, error)
-        throw error
-      }
-      totalUpserted += chunk.length
-      console.log(`[MLB Sync] Chunk ${Math.ceil(i / CHUNK_SIZE) + 1}: ${totalUpserted}/${allCategories.length}`)
-    }
-
-    const durationSeconds = (Date.now() - startTime) / 1000
-
-    if (syncLog) {
-      await supabase.from("mlb_sync_logs").update({
-        status: "success",
-        finished_at: new Date().toISOString(),
-        total_processed: allCategories.length,
-        total_upserted: totalUpserted,
-        duration_seconds: durationSeconds,
-      }).eq("id", syncLog.id)
-    }
-
-    console.log(`[MLB Sync] ✅ Done in ${durationSeconds}s — ${totalUpserted} categories`)
-
-    return new Response(JSON.stringify({
-      success: true,
-      total_processed: allCategories.length,
-      total_upserted: totalUpserted,
-      duration_seconds: durationSeconds,
-    }), { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } })
-
-  } catch (err) {
-    const durationSeconds = (Date.now() - startTime) / 1000
-    const errorMsg = String(err)
-
-    if (syncLog) {
-      await supabase.from("mlb_sync_logs").update({
-        status: "error",
-        finished_at: new Date().toISOString(),
-        error_message: errorMsg,
-        duration_seconds: durationSeconds,
-      }).eq("id", syncLog.id)
-    }
-
-    console.error("[MLB Sync] ❌ Error:", errorMsg)
-    return new Response(JSON.stringify({ error: errorMsg }), {
-      status: 500,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    })
-  }
+  return new Response(JSON.stringify({ success: true, message: "Sincronização iniciada em background", sync_id: syncLog?.id }), {
+    status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" },
+  })
 })
