@@ -3,6 +3,7 @@ import { productsService } from "@/services/products.service";
 import { marketplaceService } from "@/services/marketplace.service";
 import { useAuth } from "@/lib/auth";
 import { useState, useEffect } from "react";
+import { MARKETPLACE_NAMES } from "@/constants/marketplaces";
 import { Link, useNavigate } from "react-router-dom";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -25,7 +26,7 @@ const statusConfig: Record<string, { label: string; className: string }> = {
   inactive: { label: "Inativo", className: "bg-destructive/15 text-destructive border-destructive/30" },
 };
 
-const marketplaces = ["Mercado Livre", "Shopee", "Amazon", "Magalu", "Americanas", "Shopify"];
+const marketplaces = MARKETPLACE_NAMES;
 
 export default function ProductsPage() {
   const { profile } = useAuth();

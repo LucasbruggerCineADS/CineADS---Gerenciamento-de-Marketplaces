@@ -39,7 +39,7 @@ export default function PickingPackingPage() {
     queryKey: ["tenant-name", profile?.tenant_id],
     queryFn: async () => {
       if (!profile?.tenant_id) return null;
-      const { data } = await supabase.from("tenants").select("name").eq("id", profile.tenant_id).single();
+      const { data } = await supabase.from("tenants").select("name").eq("id", profile.tenant_id).maybeSingle();
       return data;
     },
     enabled: !!profile?.tenant_id,
@@ -47,7 +47,8 @@ export default function PickingPackingPage() {
 
   const updateStatus = useMutation({
     mutationFn: async ({ orderId, status }: { orderId: string; status: string }) => {
-      const { error } = await supabase.from("orders").update({ status }).eq("id", orderId);
+      if (!profile?.tenant_id) throw new Error("Sessão inválida");
+      const { error } = await supabase.from("orders").update({ status }).eq("id", orderId).eq("tenant_id", profile.tenant_id);
       if (error) throw error;
     },
     onSuccess: () => {

@@ -97,7 +97,7 @@ export function AppSidebar() {
     queryKey: ["tenant-logo", profile?.tenant_id],
     queryFn: async () => {
       if (!profile?.tenant_id) return null;
-      const { data } = await supabase.from("tenants").select("name, logo_url").eq("id", profile.tenant_id).single();
+      const { data } = await supabase.from("tenants").select("name, logo_url").eq("id", profile.tenant_id).maybeSingle();
       return data;
     },
     enabled: !!profile?.tenant_id,

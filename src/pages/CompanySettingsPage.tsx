@@ -45,7 +45,7 @@ export default function CompanySettingsPage() {
     queryKey: ["tenant", profile?.tenant_id],
     queryFn: async () => {
       if (!profile?.tenant_id) return null;
-      const { data, error } = await supabase.from("tenants").select("*").eq("id", profile.tenant_id).single();
+      const { data, error } = await supabase.from("tenants").select("*").eq("id", profile.tenant_id).maybeSingle();
       if (error) throw error;
       return data;
     },

@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "@/lib/auth";
 import { supabase } from "@/integrations/supabase/client";
+import { INTEGRATED_MARKETPLACES } from "@/constants/marketplaces";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -60,10 +61,9 @@ export default function CatalogSyncPage() {
         <Select value={marketplace} onValueChange={setMarketplace}>
           <SelectTrigger className="w-48"><SelectValue /></SelectTrigger>
           <SelectContent>
-            <SelectItem value="Mercado Livre">Mercado Livre</SelectItem>
-            <SelectItem value="Shopee">Shopee</SelectItem>
-            <SelectItem value="Amazon">Amazon</SelectItem>
-            <SelectItem value="Magalu">Magalu</SelectItem>
+            {INTEGRATED_MARKETPLACES.map((m) => (
+              <SelectItem key={m} value={m}>{m}</SelectItem>
+            ))}
           </SelectContent>
         </Select>
         <Button variant="outline" size="sm" onClick={() => refetch()}>

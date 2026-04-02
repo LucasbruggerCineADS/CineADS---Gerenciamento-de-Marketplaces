@@ -47,7 +47,7 @@ export default function OrderDetailPage() {
         .from("orders")
         .select("*, order_items(id, title, quantity, price, product_variant_id)")
         .eq("id", id)
-        .single();
+        .maybeSingle();
       if (error) throw error;
       return data;
     },

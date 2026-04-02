@@ -3,6 +3,7 @@ import { ordersService } from "@/services/orders.service";
 import { useAuth } from "@/lib/auth";
 import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
+import { MARKETPLACE_FILTER_OPTIONS } from "@/constants/marketplaces";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -43,7 +44,7 @@ const periodOptions = [
   { value: "custom", label: "Personalizado" },
 ];
 
-const marketplaceOptions = ["Todos os marketplaces", "Mercado Livre", "Shopee", "Amazon", "Magalu", "Americanas", "Shopify"];
+const marketplaceOptions = MARKETPLACE_FILTER_OPTIONS;
 
 const PAGE_SIZE = 50;
 

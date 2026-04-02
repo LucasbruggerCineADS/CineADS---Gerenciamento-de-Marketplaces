@@ -94,7 +94,7 @@ export default function ReturnsPage() {
       let totalRestored = 0;
       for (const item of orderItems) {
         if (!item.product_variant_id) continue;
-        const { data: variant } = await supabase.from("product_variants").select("stock").eq("id", item.product_variant_id).single();
+        const { data: variant } = await supabase.from("product_variants").select("stock").eq("id", item.product_variant_id).maybeSingle();
         const newStock = (variant?.stock || 0) + item.quantity;
         await supabase.from("product_variants").update({ stock: newStock }).eq("id", item.product_variant_id);
         await supabase.from("stock_movements").insert({ tenant_id: profile.tenant_id, product_variant_id: item.product_variant_id, type: "return", quantity: item.quantity, reference_id: returnItem.id, reason: "Estoque reposto por devolução aprovada" });
